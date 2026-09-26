@@ -1,58 +1,39 @@
 """
-JSON sanitization service for extracting and parsing JSON from LLM outputs.
+Safe JSON extraction from LLM responses.
 """
 
 import json
 import re
-from typing import Any, Dict
+from typing import Any
 
 
 class JSONSanitizationError(Exception):
-    """Raised when JSON output cannot be parsed or sanitized safely."""
-    pass
+    """Raised when a valid JSON object cannot be recovered safely."""
 
 
-def sanitize_json_string(raw_text: str) -> Dict[str, Any]:
-    """
-    Sanitize and parse raw LLM output into a Python dictionary.
-
-    Steps:
-    1. Removes markdown code block markers (e.g. ```json ... ```).
-    2. Strips surrounding whitespace and conversational text.
-    3. Locates the outermost JSON object boundaries '{' ... '}'.
-    4. Safely parses using json.loads().
-
-    Raises:
-        JSONSanitizationError: If valid JSON cannot be located or parsed.
-    """
-    if not raw_text or not isinstance(raw_text, str):
-        raise JSONSanitizationError("Input text for JSON sanitization is empty or not a string.")
+def sanitize_json_string(raw_text: str) -> dict[str, Any]:
+    """Extract the first parseable JSON object without using executable parsing."""
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raise JSONSanitizationError("LLM response is empty or not a string.")
 
     text = raw_text.strip()
+    fence_match = re.search(
+        r"```(?:json)?\s*([\s\S]*?)\s*```",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if fence_match:
+        text = fence_match.group(1).strip()
 
-    # Step 1: Remove markdown code fences if present
-    # Matches ```json ... ``` or ``` ... ```
-    fence_pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
-    match_fence = re.search(fence_pattern, text, re.IGNORECASE)
-    if match_fence:
-        text = match_fence.group(1).strip()
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(text):
+        if character != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
 
-    # Step 2 & 3: Find outermost '{' and '}'
-    first_brace = text.find("{")
-    last_brace = text.rfind("}")
-
-    if first_brace == -1 or last_brace == -1 or first_brace > last_brace:
-        raise JSONSanitizationError(
-            f"No valid JSON object boundaries ('{{' and '}}') found in response: '{raw_text[:100]}...'"
-        )
-
-    json_candidate = text[first_brace:last_brace + 1].strip()
-
-    # Step 4: Parse JSON safely without eval()
-    try:
-        data = json.loads(json_candidate)
-        if not isinstance(data, dict):
-            raise JSONSanitizationError(f"Parsed JSON is not an object/dict: type={type(data).__name__}")
-        return data
-    except json.JSONDecodeError as exc:
-        raise JSONSanitizationError(f"Failed to parse JSON string: {exc}") from exc
+    raise JSONSanitizationError("No valid JSON object could be recovered from the LLM response.")
