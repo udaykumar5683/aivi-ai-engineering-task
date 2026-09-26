@@ -32,7 +32,7 @@ def test_adversarial_resume_text_is_processed_as_data():
             "match_score": 70,
             "top_strengths": ["Python development evidence"],
             "missing_skills": ["SQL"],
-            "summary": "Candidate has explicit Python evidence.\nSQL evidence is not present in the resume."
+            "summary": "Candidate has explicit Python evidence.\\nSQL evidence is not present in the resume."
         }"""
     )
 
