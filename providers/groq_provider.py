@@ -1,71 +1,57 @@
 """
-Groq API LLM provider implementation.
+Groq provider using strict Structured Outputs.
 """
 
 from typing import Optional
-from config import config, ConfigurationError
+
+from groq import Groq
+
+from config import ConfigurationError, config
+from models import get_llm_json_schema
 from prompts import SYSTEM_PROMPT
 from providers.base import LLMProvider
 from services.retry import with_retry
 
-try:
-    from groq import Groq
-except ImportError:
-    Groq = None  # Handled at runtime instantiation if selected
-
 
 class GroqProvider(LLMProvider):
-    """
-    LLM provider using the Groq Python SDK.
-    """
+    """LLM provider backed by the Groq Python SDK."""
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, timeout_seconds: Optional[int] = None) -> None:
         self.api_key = api_key or config.groq_api_key
         self.model = model or config.groq_model
+        self.timeout_seconds = timeout_seconds or config.llm_timeout_seconds
 
         if not self.api_key:
             raise ConfigurationError("GROQ_API_KEY is not set.")
 
-        if Groq is None:
-            raise ImportError(
-                "The 'groq' package is not installed. "
-                "Please run `pip install groq` to use GroqProvider."
-            )
-
-        self.client = Groq(api_key=self.api_key)
+        self.client = Groq(api_key=self.api_key, timeout=self.timeout_seconds)
 
     @with_retry(max_retries=3, initial_delay=1.0)
-    def evaluate(
-        self,
-        resume_text: str,
-        job_description: str,
-        repair_prompt: Optional[str] = None
-    ) -> str:
-        """
-        Evaluate candidate resume against job description using Groq LLM API.
-        Enforces structured JSON response format.
-        """
+    def evaluate(self, resume_text: str, job_description: str, repair_prompt: Optional[str] = None) -> str:
+        """Evaluate resume content with provider-side strict JSON Schema output."""
+        user_content = f"Candidate Resume:\n{resume_text}\n\nJob Description:\n{job_description}"
+
         if repair_prompt:
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": repair_prompt}
-            ]
-        else:
-            user_content = (
-                f"Candidate Resume:\n{resume_text}\n\n"
-                f"Job Description:\n{job_description}"
-            )
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content}
-            ]
+            user_content += f"\n\nOutput repair instructions:\n{repair_prompt}"
 
         completion = self.client.chat.completions.create(
             model=self.model,
-            messages=messages,
-            temperature=0.1,
-            response_format={"type": "json_object"}
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "resume_job_match",
+                    "strict": True,
+                    "schema": get_llm_json_schema(),
+                },
+            },
         )
 
         content = completion.choices[0].message.content
-        return content or ""
+        if not content:
+            raise ValueError("Groq returned an empty response.")
+        return content
