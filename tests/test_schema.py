@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from models import MatchResult, get_fallback_result
+from models import MatchResult, get_fallback_result, get_llm_json_schema
 
 
 def valid_data():
@@ -83,6 +83,18 @@ def test_strict_types_rejected():
     data["match_score"] = "85"
     with pytest.raises(ValidationError):
         MatchResult(**data)
+
+
+def test_provider_schema_is_closed_and_complete():
+    schema = get_llm_json_schema()
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {
+        "match_score",
+        "top_strengths",
+        "missing_skills",
+        "summary",
+    }
 
 
 def test_fallback_is_valid():
