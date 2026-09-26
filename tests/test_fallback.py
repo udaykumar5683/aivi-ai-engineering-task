@@ -39,7 +39,7 @@ def test_one_shot_repair_success():
             "match_score": 82,
             "top_strengths": ["Python"],
             "missing_skills": ["Docker"],
-            "summary": "Repaired output is valid.\nThe repaired result satisfies the schema."
+            "summary": "Repaired output is valid.\\nThe repaired result satisfies the schema."
         }""",
     )
 
