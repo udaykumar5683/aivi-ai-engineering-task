@@ -1,0 +1,23 @@
+AI Engineer Intern
+
+Responsibilities:
+- Build Python-based AI applications.
+- Work with LLM APIs.
+- Build and evaluate AI workflows.
+- Implement structured model outputs.
+- Develop reliable error-handling pipelines.
+- Work with prompt engineering.
+- Build production-oriented AI features.
+
+Required:
+- Python
+- Generative AI / LLM experience
+- Prompt engineering
+- Structured output handling
+- Basic software engineering skills
+
+Preferred:
+- Multi-agent systems
+- LangChain or CrewAI
+- Cloud experience
+- Machine learning

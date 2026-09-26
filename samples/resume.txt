@@ -1,0 +1,31 @@
+Uday Kumar G
+
+AI/ML Engineer
+
+B.Tech graduate in Artificial Intelligence and Machine Learning focused
+on building practical AI systems, multi-agent workflows, LLM applications,
+prompt engineering and deep learning.
+
+Skills:
+Python
+Java
+SQL
+Prompt Engineering
+Multi-Agent Systems
+Generative AI
+Machine Learning
+Deep Learning
+NLP
+Computer Vision
+AWS Basics
+GitHub
+CrewAI
+LangChain
+Groq
+Gemini
+Hugging Face
+
+Projects:
+HireMind
+Image Restoration and Enhancement System
+AI Career Agent
