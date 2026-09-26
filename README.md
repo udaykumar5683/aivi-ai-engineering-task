@@ -1,349 +1,308 @@
-# Resume-to-Job Description AI Matching Engine
+# AIVI AI Engineering Task
 
-A production-style Python application and LLM pipeline that evaluates raw resumes against Job Descriptions, returning strictly validated structured JSON output.
+Standalone Python pipeline for evaluating a raw resume against a Job Description with LLMs.
 
-> **Assessment Note:** The original assessment requirement specified the **Gemini API**. To enable flexible local development and testing, this codebase implements a robust **Provider Abstraction** supporting **Groq** (default for local dev) and **Gemini** (for final submission). The provider is selected seamlessly via environment variable (`LLM_PROVIDER=groq` or `LLM_PROVIDER=gemini`).
+## Assessment alignment
 
----
+The assessment asks for a Gemini based Python script that accepts resume text plus a sample Job Description and returns:
 
-## Table of Contents
-- [Project Overview](#project-overview)
-- [Architecture](#architecture)
-- [Key Features](#key-features)
-- [Project Structure](#project-structure)
-- [Setup & Installation](#setup--installation)
-- [Environment Variables](#environment-variables)
-- [Provider Selection](#provider-selection)
-  - [Groq Usage (Local Dev)](#groq-usage-local-dev)
-  - [Gemini Usage (Final Submission)](#gemini-usage-final-submission)
-- [How to Run](#how-to-run)
-- [Example Input & Output](#example-input--output)
-- [System Prompt & Adversarial Resilience](#system-prompt--adversarial-resilience)
-- [Schema Enforcement & Sanitization](#schema-enforcement--sanitization)
-- [Error Handling & Fallback Strategy](#error-handling--fallback-strategy)
-- [Retry Strategy](#retry-strategy)
-- [Testing](#testing)
-- [Security Notes](#security-notes)
-- [Project Limitations](#project-limitations)
+- match_score: integer from 0 to 100
+- top_strengths
+- missing_skills
+- a two line summary
 
----
+This repository supports both providers behind one interface:
 
-## Project Overview
+- Groq for fast local development and testing
+- Gemini for the assessment compatible run
 
-The **aivi-ai-engineering-task** application provides an automated, adversarial-resilient evaluation pipeline comparing candidate resumes to job descriptions. It uses LLMs to compute a match score, identify top candidate strengths grounded strictly in resume evidence, highlight missing requirements, and generate a concise 2-line summary.
-
----
+Select the provider with LLM_PROVIDER or the CLI --provider option.
 
 ## Architecture
 
-The system follows a clean modular architecture separating concerns across configuration, model definition, LLM provider abstraction, sanitization, retry logic, evaluation orchestration, and testing:
+Resume text + Job Description
+    ->
+Input validation
+    ->
+LLM provider
+    ->
+Provider side structured JSON
+    ->
+JSON sanitization
+    ->
+Pydantic validation
+    ->
+One shot schema repair when model output is invalid
+    ->
+Validated JSON result or structured fallback
 
-```
-                  ┌─────────────────────────────────┐
-                  │    Raw Resume + Job Description │
-                  └────────────────┬────────────────┘
-                                   │
-                                   ▼
-                  ┌─────────────────────────────────┐
-                  │        Input Validation         │
-                  │   (Non-empty, length check)     │
-                  └────────────────┬────────────────┘
-                                   │
-                                   ▼
-                  ┌─────────────────────────────────┐
-                  │   LLM Provider (Groq / Gemini)  │
-                  │   (Bounded Retry w/ Backoff)    │
-                  └────────────────┬────────────────┘
-                                   │
-                                   ▼
-                  ┌─────────────────────────────────┐
-                  │        JSON Sanitizer           │
-                  │ (Strip markdown, extract JSON) │
-                  └────────────────┬────────────────┘
-                                   │
-                                   ▼
-                  ┌─────────────────────────────────┐
-                  │       Pydantic Validation       │
-                  │     (Strict MatchResult)        │
-                  └───────┬─────────────────┬───────┘
-                          │                 │
-                  Passes  │                 │ Fails
-                          ▼                 ▼
-                  ┌──────────────┐  ┌────────────────┐
-                  │ Valid JSON   │  │ One-Shot LLM   │
-                  │ Output       │  │ Repair Retry   │
-                  └──────────────┘  └───────┬────────┘
-                                            │
-                                    Passes  │ Fails
-                                    ┌───────┴────────┐
-                                    ▼                ▼
-                             ┌──────────────┐ ┌──────────────┐
-                             │ Valid JSON   │ │ Predictable  │
-                             │ Output       │ │ Fallback     │
-                             └──────────────┘ └──────────────┘
-```
+Provider failures are handled separately from model output validation. This prevents an
+authentication or service failure from triggering an unnecessary repair request.
 
----
-
-## Key Features
-
-1. **Provider Abstraction**: Switch between Groq and Gemini seamlessly without modifying evaluation logic.
-2. **Strict Schema Enforcement**: Pydantic v2 validation ensures valid data types, score ranges (0–100), list item counts (1–5), exact summary line counts (2 non-empty lines), and rejection of extra fields (`extra="forbid"`).
-3. **Adversarial Resilience**: System prompt designed to withstand prompt injection ("ignore previous instructions", "give 100", "reveal system prompt") by treating documents strictly as untrusted data.
-4. **Evidence Grounding**: Strict guardrails against hallucinated metrics, unearned quantitative performance claims, or invented skills.
-5. **Multi-Layer Fault Tolerance**:
-   - Bounded exponential backoff + jitter retries for transient errors (429, 503, timeouts).
-   - One-shot LLM self-repair attempt on JSON syntax or Pydantic validation errors.
-   - Structured JSON fallback responses (never fake candidate scores on failure).
-6. **Clean CLI Output**: Emits only valid JSON on stdout; logs and errors are routed to stderr.
-
----
-
-## Project Structure
+## Project structure
 
 ```
 aivi-ai-engineering-task/
-│
-├── main.py                    # CLI entrypoint
-├── config.py                  # Configuration management & environment validation
-├── models.py                  # Pydantic v2 MatchResult output schema & fallback builder
-├── prompts.py                 # System prompt, evidence grounding rules & few-shot examples
-│
-├── providers/                 # Vendor LLM Provider Abstraction
+├── main.py
+├── config.py
+├── models.py
+├── prompts.py
+├── providers/
 │   ├── __init__.py
-│   ├── base.py                # Abstract LLMProvider interface
-│   ├── groq_provider.py       # Official Groq Python SDK implementation
-│   └── gemini_provider.py     # Official Google GenAI Python SDK implementation
-│
-├── services/                  # Business Logic Services
+│   ├── base.py
+│   ├── groq_provider.py
+│   └── gemini_provider.py
+├── services/
 │   ├── __init__.py
-│   ├── evaluator.py           # Evaluation pipeline orchestration & repair loop
-│   ├── retry.py               # Exponential backoff + jitter retry decorator
-│   └── sanitizer.py           # Robust JSON extraction & safe parsing
-│
-├── tests/                     # Comprehensive Unit Test Suite
-│   ├── test_schema.py         # Pydantic validation & boundary tests
-│   ├── test_sanitizer.py      # JSON sanitization & fence stripping tests
-│   ├── test_injection.py      # Prompt injection resilience tests
-│   ├── test_fallback.py       # Repair attempt & fallback output tests
-│   └── test_retry.py          # Transient vs permanent error classification tests
-│
-├── samples/                   # Evaluation Text Files
-│   ├── resume.txt             # Sample candidate resume
-│   └── job_description.txt    # Sample target job description
-│
-├── .env.example               # Environment variable template
-├── .gitignore                 # Git exclusion configuration
-├── requirements.txt           # Dependency specifications
-└── README.md                  # Project documentation
+│   ├── evaluator.py
+│   ├── retry.py
+│   └── sanitizer.py
+├── tests/
+│   ├── test_schema.py
+│   ├── test_sanitizer.py
+│   ├── test_injection.py
+│   ├── test_fallback.py
+│   └── test_retry.py
+├── samples/
+│   ├── resume.txt
+│   └── job_description.txt
+├── .env.example
+├── .gitignore
+├── requirements.txt
+└── README.md
 ```
 
----
+## Setup
 
-## Setup & Installation
+Python 3.10 or newer is recommended.
 
-### 1. Prerequisites
-- Python 3.10+ (tested on Python 3.12 / 3.13)
-- Pip package manager
+Windows PowerShell:
 
-### 2. Clone / Navigate to Workspace
-```bash
-cd e:/aivi-ai-engineering-task
-```
-
-### 3. Create Virtual Environment
-```bash
+```powershell
 python -m venv .venv
-source .venv/bin/activate        # Linux / macOS
-# OR
-.venv\Scripts\activate           # Windows PowerShell
-```
-
-### 4. Install Dependencies
-```bash
+.venv\\Scripts\\activate
 pip install -r requirements.txt
 ```
 
----
+Create a local .env file from .env.example.
 
-## Environment Variables
+Never commit the .env file.
 
-Copy `.env.example` to create `.env`:
+## Environment variables
 
-```bash
-cp .env.example .env
-```
-
-Configuration Options:
-
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `LLM_PROVIDER` | Selected LLM provider (`groq` or `gemini`) | `groq` | Yes |
-| `GROQ_API_KEY` | API key for Groq API | - | If `LLM_PROVIDER=groq` |
-| `GROQ_MODEL` | Groq model identifier | `openai/gpt-oss-20b` | No |
-| `GEMINI_API_KEY` | API key for Google Gemini API | - | If `LLM_PROVIDER=gemini` |
-| `GEMINI_MODEL` | Gemini model identifier | `gemini-2.5-flash` | No |
-| `MAX_INPUT_LENGTH` | Max character count per document | `50000` | No |
-
----
-
-## Provider Selection
-
-### Groq Usage (Local Dev)
-To use Groq (default for local development and testing):
 ```env
 LLM_PROVIDER=groq
-GROQ_API_KEY=gsk_your_groq_api_key_here
+
+GROQ_API_KEY=
 GROQ_MODEL=openai/gpt-oss-20b
-```
 
-### Gemini Usage (Final Submission)
-To switch to Gemini (as requested by original assessment criteria):
-```env
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=AIzaSy_your_gemini_api_key_here
+GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.5-flash
+
+MAX_INPUT_LENGTH=50000
+LLM_TIMEOUT_SECONDS=30
 ```
 
-Or pass `--provider gemini` on the CLI to override the environment setting.
+## Run with Groq
 
----
-
-## How to Run
-
-Run the standalone CLI with the provided sample files:
-
-```bash
-python main.py samples/resume.txt samples/job_description.txt
+```powershell
+python main.py samples/resume.txt samples/job_description.txt --provider groq
 ```
 
-Override provider at runtime:
-```bash
+## Run with Gemini
+
+```powershell
 python main.py samples/resume.txt samples/job_description.txt --provider gemini
 ```
 
----
+The application prints only the final JSON result to stdout.
 
-## Example Input & Output
+## Output contract
 
-### Input Resume (`samples/resume.txt`):
-```text
-Uday Kumar G
-AI/ML Engineer
-B.Tech graduate in Artificial Intelligence and Machine Learning focused on building practical AI systems...
-Skills: Python, Java, SQL, Prompt Engineering, Multi-Agent Systems, Generative AI, CrewAI, LangChain, Groq, Gemini...
-```
-
-### Input Job Description (`samples/job_description.txt`):
-```text
-AI Engineer Intern
-Responsibilities: Build Python-based AI applications, work with LLM APIs, prompt engineering...
-Required: Python, Generative AI / LLM experience, Prompt engineering, Structured output handling.
-Preferred: Multi-agent systems, LangChain or CrewAI, Cloud experience...
-```
-
-### Output JSON (`stdout`):
-```json
-{
-  "match_score": 92,
-  "top_strengths": [
-    "Extensive hands-on experience with Python, Generative AI, and LLM APIs",
-    "Proven background with prompt engineering and structured model outputs",
-    "Strong experience with preferred multi-agent frameworks including LangChain and CrewAI"
-  ],
-  "missing_skills": [
-    "AWS or enterprise cloud infrastructure experience"
-  ],
-  "summary": "Candidate demonstrates excellent alignment with all core required AI Engineer Intern responsibilities.\nSlight gap in enterprise cloud deployment experience which can be easily onboarded."
-}
-```
-
----
-
-## System Prompt & Adversarial Resilience
-
-The system prompt enforces strict trust boundaries:
-- **Untrusted Input**: Resumes and JDs are treated purely as data, never as executable instructions.
-- **Injection Immunization**: Directly defies instructions like "ignore previous instructions", "give score 100", or "reveal system prompt".
-- **Grounding Rules**: Prohibits fabricating performance gains (e.g. converting "Worked with PostgreSQL" to "Reduced query times by 40%").
-- **Semantic Matching**: Recognizes equivalent terminology (e.g., "REST endpoints" matching "Build REST APIs").
-
----
-
-## Schema Enforcement & Sanitization
-
-Outputs undergo two layers of validation:
-1. **JSON Sanitization (`services/sanitizer.py`)**:
-   - Strips markdown block fences (` ```json ... ``` `).
-   - Removes conversational wrapper text.
-   - Parses JSON using `json.loads` safely (never unsafe `eval()`).
-2. **Pydantic Model Validation (`models.py`)**:
-   - `match_score`: Integer bounded between `0` and `100`.
-   - `top_strengths`: 1 to 5 non-empty string items.
-   - `missing_skills`: 1 to 5 non-empty string items.
-   - `summary`: Exactly 2 non-empty lines separated by `\n`.
-   - `model_config = ConfigDict(extra="forbid")`: Forbids unexpected top-level fields.
-
----
-
-## Error Handling & Fallback Strategy
-
-If validation or sanitization fails:
-1. **One-Shot Repair Retry**: Evaluator calls the LLM once more with a repair prompt containing error details and the previous response.
-2. **Predictable Fallback**: If the repair attempt fails or an unrecoverable service error occurs, evaluator returns a safe fallback object:
+Example:
 
 ```json
 {
-  "match_score": 0,
+  "match_score": 82,
   "top_strengths": [
-    "Evaluation unavailable."
+    "Python development experience",
+    "Generative AI project experience"
   ],
   "missing_skills": [
-    "Evaluation could not be completed."
+    "Kubernetes"
   ],
-  "summary": "The AI evaluation could not be parsed into valid JSON structure.\nNo match score was computed."
+  "summary": "Good alignment with the core AI engineering requirements.\nKubernetes experience is not documented in the supplied resume."
 }
 ```
 
-*Note: The application never fakes candidate match scores during service failures.*
+The example is illustrative only.
 
----
+## Structured output
 
-## Retry Strategy
+### Groq
 
-Transient network failures, HTTP 429 rate limits, and 503 service outages are handled automatically by `services/retry.py`:
-- **Exponential Backoff with Jitter**: Delay sequence `1s + jitter`, `2s + jitter`, `4s + jitter`.
-- **Bounded Attempts**: Maximum 3 retries (4 attempts total).
-- **Smart Classification**: Permanent errors (401 Unauthorized, invalid API key, 404 Model Not Found) fail immediately without retrying.
+The Groq provider uses strict Structured Outputs with:
 
----
+- response format type json_schema
+- strict true
+- required fields
+- additionalProperties false
+
+The provider side schema is intentionally conservative. Detailed constraints such as the
+0 to 100 score range, list limits, strict types and exactly two summary lines are enforced
+again with Pydantic.
+
+### Gemini
+
+The Gemini provider uses the Google GenAI SDK with JSON MIME type plus the Pydantic
+MatchResult class as response_schema.
+
+The response is then validated again through MatchResult.
+
+## Prompt engineering
+
+The system prompt treats the resume and Job Description as untrusted data.
+
+It explicitly prevents document text from changing:
+
+- system instructions
+- scoring rules
+- output schema
+- role definition
+
+The prompt also requires evidence grounded output and prohibits invented performance
+numbers, record counts, skills, technologies, certifications, employers and experience.
+
+Few shot examples cover:
+
+1. Prompt injection
+2. Unsupported metrics
+3. Complete matches with an empty missing_skills list
+4. Semantic REST API matching
+
+## JSON sanitization
+
+services/sanitizer.py safely extracts a JSON object from model output.
+
+It accepts:
+
+- raw JSON
+- fenced JSON
+- JSON surrounded by normal text
+
+It uses json.JSONDecoder.raw_decode and json.loads only. No executable parsing is used.
+
+## Error handling
+
+The pipeline separates two failure classes.
+
+### Provider/API failure
+
+Examples:
+
+- 429 rate limit
+- 408 timeout
+- 5xx service failure
+- network connection failure
+
+These enter the bounded retry layer.
+
+Permanent errors such as invalid credentials or model not found do not trigger retries.
+
+### Model output failure
+
+Examples:
+
+- malformed JSON
+- schema validation failure
+
+These trigger one repair request using the same resume and Job Description.
+
+If repair also fails, the pipeline returns a structured fallback.
+
+## Retry policy
+
+Transient errors use exponential backoff with jitter.
+
+Default delay sequence:
+
+```
+1 second + jitter
+2 seconds + jitter
+4 seconds + jitter
+```
+
+There are at most three retries after the initial request.
+
+The timeout is configurable through LLM_TIMEOUT_SECONDS.
+
+## Input validation
+
+The evaluator rejects:
+
+- empty resume text
+- empty Job Description
+- inputs exceeding MAX_INPUT_LENGTH
+
+Whitespace is trimmed before evaluation.
+
+## Pydantic validation
+
+MatchResult uses strict Pydantic v2 validation:
+
+- strict integer score
+- score range 0 to 100
+- 1 to 5 top strengths
+- 0 to 5 missing skills
+- blank list items rejected
+- exactly two non-empty summary lines
+- unexpected top level fields rejected
 
 ## Testing
 
-Execute unit tests without calling external APIs using pytest:
+Run:
 
-```bash
+```powershell
 pytest tests/ -v
 ```
 
-Test Coverage:
-- `test_schema.py`: Pydantic field constraints, score boundaries, line counts, forbidden fields.
-- `test_sanitizer.py`: Clean JSON, fenced JSON, conversational wrapper JSON, malformed syntax.
-- `test_injection.py`: Resistance to adversarial prompt injection inputs.
-- `test_fallback.py`: One-shot repair attempt, fallback generation, input validation.
-- `test_retry.py`: Transient vs permanent error classification & backoff behavior.
+The test suite covers:
 
----
+- schema boundaries
+- strict types
+- empty missing_skills
+- extra fields
+- JSON sanitization
+- malformed JSON
+- braces inside JSON strings
+- prompt injection as adversarial input
+- one shot repair
+- permanent provider failure
+- fallback behavior
+- retry classification
+- bounded retry behavior
 
-## Security Notes
+The prompt injection unit test intentionally does not claim to prove LLM level security.
+Actual model resistance must be validated with an integration test, as was done in the AIVI
+Campus audit.
 
-- **Zero Secret Exposure**: API keys are loaded via environment variables and never logged or exposed in exceptions.
-- **Git Safety**: `.env` and Python virtual environment folders are excluded via `.gitignore`.
-- **Safe Parsing**: Uses standard library `json.loads()` exclusively.
+## Security
 
----
+- API keys are read from environment variables.
+- .env is ignored by Git.
+- API keys are never hard coded.
+- Raw resume and Job Description text are not logged by the evaluator.
+- JSON parsing never executes arbitrary code.
 
-## Project Limitations
+## Limitations
 
-- PDF/Word parsing is not included; inputs must be provided as text format.
-- File inputs are limited by default to 50,000 characters to prevent excessive token consumption.
+- Resume and Job Description inputs are text files in this deliverable.
+- PDF, DOCX and OCR processing are outside Deliverable 3.
+- The prompt injection unit test is deterministic and does not replace real model testing.
+- Provider side structured output does not replace application side Pydantic validation.
+
+## Development notes
+
+The original assessment requested Gemini. Groq was added only as a development provider so
+the same evaluation logic can be tested quickly. The provider abstraction keeps the business
+logic independent of the model vendor.
