@@ -94,7 +94,7 @@ def with_retry(
                     sleep_time = min(delay, max_delay) + random.uniform(0, jitter)
                     sys.stderr.write(
                         f"[RETRY] transient error ({type(exc).__name__}); "
-NaN
+                        f"retry {attempt + 1}/{max_retries} in {sleep_time:.2f}s\n"
                     )
                     time.sleep(sleep_time)
                     delay *= backoff_factor
